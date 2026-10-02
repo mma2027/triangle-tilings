@@ -1,0 +1,23 @@
+# Generated output (examples/ is committed)
+/tiling_*.svg
+/tiling_*.png
+/tiling_*.json
+
+# Python
+__pycache__/
+*.py[cod]
+*.pyo
+.venv/
+venv/
+env/
+.pytest_cache/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# OS
+.DS_Store
+Thumbs.db
