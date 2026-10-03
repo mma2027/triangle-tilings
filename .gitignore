@@ -1,6 +1,9 @@
 # Generated output
 /data/
-/tiling.*
+/tiling.png
+/tiling.svg
+/tiling.html
+/tiling.json
 /tiling_*.svg
 /tiling_*.png
 /tiling_*.json
