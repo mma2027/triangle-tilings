@@ -6,7 +6,7 @@ and exports {word: vertex coordinates} as JSON alongside the image.
 
 Examples
 --------
-python tiling.py --pqr 2 3 7                    # → data/2_3_7/d12_m0.001.png + .json
+python tiling.py --pqr 2 3 7                    # → data/2_3_7/d40_m0.001.png + .json
 python tiling.py --pqr 2 3 7 --svg              # … + .svg
 python tiling.py --pqr 2 3 7 --depth 50 --min-size 1e-4 --html   # → data/2_3_7/d50_m0.0001.*
 """
@@ -46,7 +46,7 @@ def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     ap = argparse.ArgumentParser(description="Draw triangle tilings for Δ(p,q,r).")
     ap.add_argument("--pqr", nargs=3, type=order, required=True, metavar=("P", "Q", "R"),
                     help="angles of the fundamental triangle are π/p, π/q, π/r; 0 = ∞")
-    ap.add_argument("--depth", type=int, default=12, help="max word length (default 12)")
+    ap.add_argument("--depth", type=int, default=40, help="max word length (default 40)")
     ap.add_argument("--color", choices=COLOR_SCHEMES, default="alternate",
                     help="tile coloring (default alternate = word-length parity)")
     ap.add_argument("--labels", action="store_true", help="print group words on tiles")
@@ -76,7 +76,7 @@ def display(path: Path) -> str:
 
 
 def with_ext(base: Path, ext: str) -> Path:
-    # Not Path.with_suffix: names like "d12_m0.001" already contain a dot.
+    # Not Path.with_suffix: names like "d40_m0.001" already contain a dot.
     return base.parent / f"{base.name}.{ext}"
 
 
@@ -84,7 +84,7 @@ def output_base(args: argparse.Namespace) -> Path:
     """
     Path (without extension) shared by every output of this run.
 
-    Default: data/<group>/<settings>, e.g. data/2_3_7/d12_m0.001 or
+    Default: data/<group>/<settings>, e.g. data/2_3_7/d40_m0.001 or
     data/2_3_inf/d30_m0.0005_wordlength_labels. --out overrides it; a known
     suffix on --out is dropped (and .svg / .html switch that format on).
     """

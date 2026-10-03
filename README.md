@@ -65,7 +65,7 @@ pip install -r requirements.txt
 ## Usage
 
 ```bash
-python tiling.py --pqr 2 3 7                  # → data/2_3_7/d12_m0.001.png + .json
+python tiling.py --pqr 2 3 7                  # → data/2_3_7/d40_m0.001.png + .json
 python tiling.py --pqr 2 3 7 --svg            # … + .svg
 python tiling.py --pqr 2 3 7 --html           # … + .html (zoomable viewer)
 python tiling.py --pqr 2 3 7 --svg --html     # all four files
@@ -74,7 +74,7 @@ python tiling.py --pqr 2 3 7 --svg --html     # all four files
 | Option | Default | Meaning |
 |---|---|---|
 | `--pqr P Q R` | required | triangle angles π/P, π/Q, π/R; `0` (or `inf`) means ∞ |
-| `--depth N` | `12` | max word length |
+| `--depth N` | `40` | max word length |
 | `--color {alternate,wordlength,none}` | `alternate` | `alternate` uses word-length parity (the standard checkerboard); `wordlength` uses a viridis gradient; `none` draws white tiles with outlines only |
 | `--labels` | off | print each tile's group word (`e` = identity) |
 | `--svg` | off | also write an SVG |
@@ -107,10 +107,10 @@ overwrite each other:
 ```
 data/
 ├── 2_3_7/
-│   ├── d12_m0.001.png                 # depth 12, min-size 0.001
-│   ├── d12_m0.001.json
+│   ├── d40_m0.001.png                 # depth 40, min-size 0.001
+│   ├── d40_m0.001.json
 │   ├── d50_m0.0001.html               # --html run (+ .png, .json)
-│   └── d12_m0.001_wordlength_labels.png
+│   └── d40_m0.001_wordlength_labels.png
 └── 2_3_inf/                           # ∞ is written "inf"
     └── d30_m0.0005.png
 ```
