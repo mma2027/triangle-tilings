@@ -1,7 +1,10 @@
-# Generated output (examples/ is committed)
+# Generated output
+/data/
+/tiling.*
 /tiling_*.svg
 /tiling_*.png
 /tiling_*.json
+/tiling_*.html
 
 # Python
 __pycache__/

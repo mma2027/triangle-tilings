@@ -13,12 +13,17 @@ Conventions
       V_q on the real axis (angle π/q, between sides c and a)
       V_r on the ray at angle π/p (angle π/r, between sides a and b)
   so the three reflections satisfy (ab)^r = (bc)^p = (ca)^q = 1.
+- An order of 0 means ∞: that vertex is ideal (on the unit circle, angle 0)
+  and the corresponding product of reflections is parabolic. If p = 0 the
+  triangle is built for a rotation of (p,q,r) and relabelled, so the vertex
+  at the origin is always a finite one.
 - Side c is the real axis, side b is the line at angle π/p, side a is the
   geodesic through V_q and V_r (a circle orthogonal to the unit circle in the
   hyperbolic case, a great circle in the spherical case, a line otherwise).
 
 Functions
 ---------
+angle_of(n)                       → π/n  (0 for n = 0 = ∞)
 classify(p, q, r)                 → "hyperbolic" | "euclidean" | "spherical"
 fundamental_triangle(p, q, r)     → Triangle
 circle_through(z1, z2, z3)        → (center, radius) | None
@@ -186,7 +191,18 @@ def arc_contains(u: complex, m: complex, v: complex, z: complex) -> bool:
 # Fundamental triangle
 # ---------------------------------------------------------------------------
 
+def angle_of(n: int) -> float:
+    """π/n, where n = 0 stands for ∞ (an ideal vertex with angle 0)."""
+    return 0.0 if n == 0 else math.pi / n
+
+
+def fmt_order(n: int) -> str:
+    return "∞" if n == 0 else str(n)
+
+
 def classify(p: int, q: int, r: int) -> str:
+    if 0 in (p, q, r):
+        return HYPERBOLIC
     s = Fraction(1, p) + Fraction(1, q) + Fraction(1, r)
     if s < 1:
         return HYPERBOLIC
@@ -210,7 +226,7 @@ class Triangle:
 
     @property
     def angles(self) -> tuple[float, float, float]:
-        return (math.pi / self.p, math.pi / self.q, math.pi / self.r)
+        return (angle_of(self.p), angle_of(self.q), angle_of(self.r))
 
     def edges(self) -> list[tuple[complex, complex, complex]]:
         """Boundary as (start, interior point, end) triples: c, a, b in order."""
@@ -247,12 +263,72 @@ def _measured_vertex_angles(tri: Triangle) -> tuple[float, float, float]:
     )
 
 
+def _disk_geodesic(u: complex, v: complex) -> tuple[complex, float]:
+    """Circle orthogonal to the unit circle through u, v (either may be ideal, |z| = 1)."""
+    for z in (u, v):
+        if abs(z) < 1 - 1e-12:
+            return circle_through(u, v, 1 / z.conjugate())
+    center = (u + v) / (1 + (u * v.conjugate()).real)
+    return center, abs(center - u)
+
+
+def _rotate_back(t: Triangle) -> Triangle:
+    """
+    Given the triangle for (q, r, p), relabel it as the triangle for (p, q, r).
+
+    In t the sides b', c' meet at V_q, c', a' at V_r, and a', b' at V_p, so
+    a = c', b = a', c = b'. The relations (ab)^r = (bc)^p = (ca)^q carry over.
+    """
+    vp_, vq_, vr_ = t.vertices
+    pq_, qr_, rp_ = t.side_lengths
+    rename = {"a": "c", "b": "a", "c": "b"}
+    tri = Triangle(
+        p=t.r, q=t.p, r=t.q, kind=t.kind,
+        vertices=(vr_, vp_, vq_),
+        sides={k: t.sides[v] for k, v in rename.items()},
+        side_midpoints={k: t.side_midpoints[v] for k, v in rename.items()},
+        side_lengths=(rp_, pq_, qr_),
+        view_radius=t.view_radius,
+    )
+    tri.reflections = {k: t.reflections[v] for k, v in rename.items()}
+    return tri
+
+
+def _ideal_triangle() -> Triangle:
+    """Δ(∞,∞,∞): all three vertices on the unit circle, centered on the origin."""
+    vp, vq, vr = (cmath.exp(1j * (math.pi / 2 + 2 * math.pi * k / 3)) for k in range(3))
+    sides, mids = {}, {}
+    for name, (u, v) in {"a": (vq, vr), "b": (vr, vp), "c": (vp, vq)}.items():
+        center, radius = _disk_geodesic(u, v)
+        sides[name] = Geodesic.circle(center, radius)
+        mids[name] = center - radius * center / abs(center)
+    tri = Triangle(
+        p=0, q=0, r=0, kind=HYPERBOLIC,
+        vertices=(vp, vq, vr), sides=sides, side_midpoints=mids,
+        side_lengths=(math.inf, math.inf, math.inf),
+    )
+    tri.reflections = {name: side.reflection() for name, side in sides.items()}
+    return tri
+
+
 def fundamental_triangle(p: int, q: int, r: int) -> Triangle:
-    """Build the fundamental triangle with angles π/p, π/q, π/r at V_p, V_q, V_r."""
-    if min(p, q, r) < 2:
-        raise ValueError("p, q, r must all be ≥ 2")
+    """
+    Build the fundamental triangle with angles π/p, π/q, π/r at V_p, V_q, V_r.
+    An order of 0 means ∞: that vertex is ideal (on the unit circle, angle 0).
+    """
+    if any(n != 0 and n < 2 for n in (p, q, r)):
+        raise ValueError("p, q, r must each be ≥ 2, or 0 for ∞")
+    if p == q == r == 0:
+        return _ideal_triangle()
+    if p == 0:
+        # An ideal V_p can't sit at the origin, so build a rotation of
+        # (p, q, r) that starts with a finite order and relabel it back.
+        if q != 0:
+            return _rotate_back(fundamental_triangle(q, r, p))
+        return _rotate_back(_rotate_back(fundamental_triangle(r, p, q)))
+
     kind = classify(p, q, r)
-    al, be, ga = math.pi / p, math.pi / q, math.pi / r
+    al, be, ga = angle_of(p), angle_of(q), angle_of(r)
     rot = cmath.exp(1j * al)
 
     if kind == EUCLIDEAN:
@@ -266,8 +342,10 @@ def fundamental_triangle(p: int, q: int, r: int) -> Triangle:
     else:
         # Dual law of cosines (same formula in H² with cosh, in S² with cos).
         def opposite(c_ang: float, a_ang: float, b_ang: float) -> float:
-            return (math.cos(c_ang) + math.cos(a_ang) * math.cos(b_ang)) / (
-                math.sin(a_ang) * math.sin(b_ang))
+            denom = math.sin(a_ang) * math.sin(b_ang)
+            if denom < 1e-15:
+                return math.inf     # an endpoint is ideal: the side is infinitely long
+            return (math.cos(c_ang) + math.cos(a_ang) * math.cos(b_ang)) / denom
 
         if kind == HYPERBOLIC:
             len_pq = math.acosh(opposite(ga, al, be))
@@ -281,17 +359,24 @@ def fundamental_triangle(p: int, q: int, r: int) -> Triangle:
             to_plane = lambda d: math.tan(d / 2)        # stereographic radius
 
         vq, vr = complex(to_plane(len_pq)), to_plane(len_pr) * rot
-        # Third point on side a's circle: the inverse of V_q in the unit circle
-        # (hyperbolic) or the antipode of V_q (spherical).
-        partner = 1 / vq.conjugate() if kind == HYPERBOLIC else -1 / vq.conjugate()
-        center, radius = circle_through(vq, vr, partner)
+        if kind == HYPERBOLIC:
+            # V_q / V_r may be ideal (tanh(∞) = 1), which _disk_geodesic handles.
+            center, radius = _disk_geodesic(vq, vr)
+        else:
+            # Great circle: also passes through the antipode of V_q.
+            partner = -1 / vq.conjugate()
+            center, radius = circle_through(vq, vr, partner)
         side_a = Geodesic.circle(center, radius)
-        # Pick the arc midpoint that does NOT pass through `partner`.
         n = ((vq + vr) / 2 - center)
         n /= abs(n)
-        mid_a = center + radius * n
-        if arc_contains(vq, mid_a, vr, partner):
-            mid_a = center - radius * n
+        if kind == HYPERBOLIC:
+            # The geodesic segment is the arc inside the disk (closer to the origin).
+            mid_a = min(center + radius * n, center - radius * n, key=abs)
+        else:
+            # Pick the arc midpoint that does NOT pass through `partner`.
+            mid_a = center + radius * n
+            if arc_contains(vq, mid_a, vr, partner):
+                mid_a = center - radius * n
 
         if kind == HYPERBOLIC:
             view = 1.0

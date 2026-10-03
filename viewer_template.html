@@ -1,0 +1,471 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>__TITLE__</title>
+<style>
+  :root {
+    --bg: #fafaf7;
+    --panel: rgba(255, 255, 255, 0.88);
+    --ink: #11151f;
+    --muted: #5b6270;
+    --line: #d9d6cf;
+    --accent: #e4572e;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root:not([data-theme="light"]) {
+      --bg: #0f1218;
+      --panel: rgba(24, 28, 36, 0.9);
+      --ink: #e8e6e1;
+      --muted: #9aa1ad;
+      --line: #2c323d;
+      --accent: #ff7a50;
+    }
+  }
+  :root[data-theme="dark"] {
+    --bg: #0f1218;
+    --panel: rgba(24, 28, 36, 0.9);
+    --ink: #e8e6e1;
+    --muted: #9aa1ad;
+    --line: #2c323d;
+    --accent: #ff7a50;
+  }
+  * { box-sizing: border-box; }
+  html, body { margin: 0; height: 100%; overflow: hidden; }
+  body {
+    background: var(--bg);
+    color: var(--ink);
+    font: 13px/1.4 ui-sans-serif, system-ui, -apple-system, "Segoe UI", sans-serif;
+  }
+  canvas { position: fixed; inset: 0; width: 100%; height: 100%; touch-action: none; cursor: grab; }
+  canvas.dragging { cursor: grabbing; }
+  .panel {
+    position: fixed;
+    background: var(--panel);
+    border: 1px solid var(--line);
+    border-radius: 8px;
+    padding: 8px 12px;
+    backdrop-filter: blur(6px);
+    max-width: calc(100vw - 32px);
+  }
+  #head { top: 16px; left: 16px; }
+  #head h1 { margin: 0; font-size: 15px; font-weight: 600; }
+  #head .sub { color: var(--muted); font-size: 12px; }
+  #tools { top: 16px; right: 16px; display: flex; gap: 6px; padding: 6px; }
+  #tools button {
+    font: inherit; color: var(--ink); background: transparent;
+    border: 1px solid var(--line); border-radius: 6px;
+    min-width: 32px; height: 30px; padding: 0 8px; cursor: pointer;
+  }
+  #tools button:hover { border-color: var(--muted); }
+  #tools button[aria-pressed="true"] { border-color: var(--accent); color: var(--accent); }
+  #info { bottom: 16px; left: 16px; font-family: ui-monospace, "SFMono-Regular", Consolas, monospace; font-size: 12px; }
+  #info .word { font-size: 14px; font-weight: 600; word-break: break-all; }
+  #info .dim { color: var(--muted); }
+  #status { bottom: 16px; right: 16px; color: var(--muted); font-size: 12px; }
+  @media (max-width: 560px) {
+    #status { display: none; }
+    #head .help { display: none; }
+  }
+</style>
+</head>
+<body>
+<canvas id="c"></canvas>
+<div class="panel" id="head">
+  <h1 id="title"></h1>
+  <div class="sub" id="subtitle"></div>
+  <div class="sub help">Scroll or pinch to zoom · drag to pan · click a tile to copy its word</div>
+</div>
+<div class="panel" id="tools">
+  <button id="zin" title="Zoom in (+)">+</button>
+  <button id="zout" title="Zoom out (−)">−</button>
+  <button id="reset" title="Reset view (0)">Reset</button>
+  <button id="lbl" title="Toggle labels (L)" aria-pressed="false">Labels</button>
+</div>
+<div class="panel" id="info"><span class="dim">Hover a tile</span></div>
+<div class="panel" id="status"></div>
+
+<script>
+const META = /*__META__*/null;
+const DATA = /*__DATA__*/null;
+
+// ---------------------------------------------------------------------------
+// Decode tile data
+// ---------------------------------------------------------------------------
+
+function decode(b64, Type) {
+  const bin = atob(b64);
+  const bytes = new Uint8Array(bin.length);
+  for (let i = 0; i < bin.length; i++) bytes[i] = bin.charCodeAt(i);
+  return new Type(bytes.buffer);
+}
+
+const N = META.count;
+const C = decode(DATA.centroid, Float64Array);   // 2 per tile
+const O = decode(DATA.offsets, Float32Array);    // 6 per tile
+const B = decode(DATA.bulge, Float32Array);      // 3 per tile
+const P = decode(DATA.parent, Int32Array);
+const L = decode(DATA.letter, Uint8Array);
+const EXPLICIT = META.explicit;
+
+// Word length (tiles are in BFS order, so parents come first) and bounding radius.
+const LEN = new Uint16Array(N);
+const RAD = new Float32Array(N);   // bounding radius around the centroid
+const INR = new Float32Array(N);   // inradius of the straight-edged triangle (label room)
+for (let i = 0; i < N; i++) {
+  if (EXPLICIT[i] !== undefined) LEN[i] = EXPLICIT[i].length;
+  else LEN[i] = P[i] < 0 ? 0 : LEN[P[i]] + 1;
+  let r = 0;
+  for (let k = 0; k < 3; k++) {
+    const ux = O[6 * i + 2 * k], uy = O[6 * i + 2 * k + 1];
+    const k2 = (k + 1) % 3;
+    const vx = O[6 * i + 2 * k2], vy = O[6 * i + 2 * k2 + 1];
+    const b = B[3 * i + k];
+    // Arc apex = chord midpoint + b · i(v − u)
+    const ax = (ux + vx) / 2 - b * (vy - uy), ay = (uy + vy) / 2 + b * (vx - ux);
+    r = Math.max(r, Math.hypot(ux, uy), Math.hypot(ax, ay));
+  }
+  RAD[i] = r;
+  const [x0, y0, x1, y1, x2, y2] = O.subarray(6 * i, 6 * i + 6);
+  const area = Math.abs((x1 - x0) * (y2 - y0) - (x2 - x0) * (y1 - y0)) / 2;
+  const perim = Math.hypot(x1 - x0, y1 - y0) + Math.hypot(x2 - x1, y2 - y1) + Math.hypot(x0 - x2, y0 - y2);
+  INR[i] = perim > 0 ? 2 * area / perim : 0;
+}
+
+const CLS = new Uint16Array(N);
+for (let i = 0; i < N; i++) {
+  CLS[i] = META.scheme === "alternate" ? LEN[i] % 2 : META.scheme === "wordlength" ? LEN[i] : 0;
+}
+
+function luminance(hex) {
+  const n = parseInt(hex.slice(1), 16);
+  return (0.299 * (n >> 16) + 0.587 * ((n >> 8) & 255) + 0.114 * (n & 255)) / 255;
+}
+const TEXT = META.colors.map(c => luminance(c) < 0.5 ? "#f4efe6" : "#11151f");
+
+function wordOf(i) {
+  const letters = [];
+  while (i >= 0) {
+    if (EXPLICIT[i] !== undefined) { letters.push(EXPLICIT[i]); break; }
+    if (P[i] < 0) break;
+    letters.push("abc"[L[i]]);
+    i = P[i];
+  }
+  return letters.reverse().join("");
+}
+
+// ---------------------------------------------------------------------------
+// View state
+// ---------------------------------------------------------------------------
+
+const canvas = document.getElementById("c");
+const ctx = canvas.getContext("2d");
+let W = 0, H = 0, dpr = 1;
+let cx = 0, cy = 0, scale = 1, fitScale = 1;
+let labelsOn = META.labels;
+let hovered = -1;
+let vis = new Int32Array(Math.max(N, 1));
+let visCount = 0;
+let pending = false;
+let sized = false;
+let moving = false, idleTimer = 0;
+
+const css = getComputedStyle(document.documentElement);
+const INK = () => css.getPropertyValue("--ink").trim() || "#11151f";
+const ACCENT = () => css.getPropertyValue("--accent").trim() || "#e4572e";
+
+function resize() {
+  dpr = window.devicePixelRatio || 1;
+  W = canvas.clientWidth; H = canvas.clientHeight;
+  canvas.width = Math.round(W * dpr); canvas.height = Math.round(H * dpr);
+  const oldFit = fitScale;
+  fitScale = 0.46 * Math.min(W, H) / META.viewRadius;
+  scale = sized ? scale * fitScale / oldFit : fitScale;   // keep relative zoom
+  sized = true;
+  schedule();
+}
+
+function reset() { cx = 0; cy = 0; scale = fitScale; schedule(); }
+
+const toX = x => (x - cx) * scale + W / 2;
+const toY = y => H / 2 - (y - cy) * scale;
+
+// ---------------------------------------------------------------------------
+// Drawing
+// ---------------------------------------------------------------------------
+
+// Append edge u → v (screen coords) with relative bulge b to `p` (ctx or Path2D).
+function edgeTo(p, ux, uy, vx, vy, b) {
+  const dx = vx - ux, dy = vy - uy;
+  const chord = Math.hypot(dx, dy);
+  const sag = Math.abs(b) * chord;
+  if (sag < 0.25) { p.lineTo(vx, vy); return; }
+  // Screen y is flipped, so world i(v − u) becomes (dy, −dx) here.
+  const mx = (ux + vx) / 2, my = (uy + vy) / 2;
+  const ax = mx + b * dy, ay = my - b * dx;
+  if (Math.abs(b) < 0.075) {
+    // Shallow arc: a quadratic through u, apex, v is visually exact and
+    // avoids canvas precision trouble with enormous radii.
+    p.quadraticCurveTo(2 * ax - mx, 2 * ay - my, vx, vy);
+    return;
+  }
+  const r = (chord * chord / 4 + sag * sag) / (2 * sag);
+  const ox = ax + (mx - ax) / sag * r, oy = ay + (my - ay) / sag * r;
+  const a0 = Math.atan2(uy - oy, ux - ox), a1 = Math.atan2(vy - oy, vx - ox);
+  const am = Math.atan2(ay - oy, ax - ox);
+  const TAU = 2 * Math.PI, mod = t => ((t % TAU) + TAU) % TAU;
+  p.arc(ox, oy, r, a0, a1, !(mod(am - a0) < mod(a1 - a0)));
+}
+
+function tracePath(p, i) {
+  const x0 = C[2 * i], y0 = C[2 * i + 1];
+  const sx = [], sy = [];
+  for (let k = 0; k < 3; k++) {
+    sx.push(toX(x0 + O[6 * i + 2 * k]));
+    sy.push(toY(y0 + O[6 * i + 2 * k + 1]));
+  }
+  p.moveTo(sx[0], sy[0]);
+  for (let k = 0; k < 3; k++) {
+    const k2 = (k + 1) % 3;
+    edgeTo(p, sx[k], sy[k], sx[k2], sy[k2], B[3 * i + k]);
+  }
+  p.closePath();
+}
+
+function cull() {
+  visCount = 0;
+  const minPx = moving ? 2.5 : 0.6;   // coarser while zooming / panning
+  for (let i = 0; i < N; i++) {
+    const rs = RAD[i] * scale;
+    if (rs < minPx) continue;
+    const x = toX(C[2 * i]), y = toY(C[2 * i + 1]);
+    if (x + rs < 0 || x - rs > W || y + rs < 0 || y - rs > H) continue;
+    vis[visCount++] = i;
+  }
+}
+
+function draw() {
+  pending = false;
+  const t0 = performance.now();
+  ctx.setTransform(dpr, 0, 0, dpr, 0, 0);
+  ctx.clearRect(0, 0, W, H);
+
+  const R = META.viewRadius * scale;
+  const ox = toX(0), oy = toY(0);
+  ctx.save();
+  ctx.beginPath(); ctx.arc(ox, oy, R, 0, 2 * Math.PI); ctx.clip();
+  ctx.fillStyle = META.unresolved;   // stands in for sub-pixel tiles
+  ctx.fillRect(0, 0, W, H);
+
+  cull();
+  for (let k = 0; k < META.colors.length; k++) {
+    ctx.beginPath();
+    let any = false;
+    for (let j = 0; j < visCount; j++) {
+      const i = vis[j];
+      if (CLS[i] !== k) continue;
+      tracePath(ctx, i); any = true;
+    }
+    if (any) { ctx.fillStyle = META.colors[k]; ctx.fill(); }
+  }
+
+  ctx.strokeStyle = META.edge;
+  const strokeBands = moving ? [[14, Infinity, 0.8]] : [[3, 14, 0.35], [14, Infinity, 0.8]];
+  for (const [lo, hi, w] of strokeBands) {
+    ctx.beginPath();
+    for (let j = 0; j < visCount; j++) {
+      const i = vis[j], rs = RAD[i] * scale;
+      if (rs >= lo && rs < hi) tracePath(ctx, i);
+    }
+    ctx.lineWidth = w; ctx.stroke();
+  }
+
+  if (labelsOn) drawLabels();
+  ctx.restore();
+
+  ctx.beginPath();
+  ctx.arc(ox, oy, (META.boundary ?? META.viewRadius) * scale, 0, 2 * Math.PI);
+  ctx.lineWidth = 1; ctx.strokeStyle = INK(); ctx.stroke();
+
+  if (hovered >= 0) {
+    ctx.beginPath(); tracePath(ctx, hovered);
+    ctx.lineWidth = 2; ctx.strokeStyle = ACCENT(); ctx.stroke();
+  }
+
+  const ms = performance.now() - t0;
+  document.getElementById("status").textContent =
+    `zoom ×${(scale / fitScale).toPrecision(3)} · ${visCount.toLocaleString()} of ${N.toLocaleString()} tiles drawn · ${ms.toFixed(0)} ms`;
+}
+
+function drawLabels() {
+  ctx.textAlign = "center"; ctx.textBaseline = "middle";
+  let drawn = 0;
+  for (let j = 0; j < visCount && drawn < 3000; j++) {
+    const i = vis[j], ins = INR[i] * scale;
+    if (ins < 6) continue;
+    const word = wordOf(i) || "e";
+    // Text must fit inside the incircle: width ≈ 0.62·fs·chars, height ≈ fs.
+    let fs = Math.min(14, 1.5 * ins, 2.2 * ins / (0.62 * Math.max(1, word.length)));
+    const x = toX(C[2 * i]), y = toY(C[2 * i + 1]);
+    // Curved edges can cut into the box, so check its corners against the real tile.
+    const path = new Path2D();
+    tracePath(path, i);
+    const fits = f => {
+      const hw = 0.31 * f * word.length, hh = 0.5 * f;
+      return [[-hw, -hh], [hw, -hh], [-hw, hh], [hw, hh]].every(
+        ([dx, dy]) => ctx.isPointInPath(path, (x + dx) * dpr, (y + dy) * dpr));
+    };
+    while (fs >= 7 && !fits(fs)) fs *= 0.8;
+    if (fs < 7) continue;
+    ctx.font = `${fs}px ui-monospace, Consolas, monospace`;
+    ctx.fillStyle = TEXT[CLS[i]] ?? "#11151f";
+    ctx.fillText(word, x, y);
+    drawn++;
+  }
+}
+
+function schedule() {
+  if (!pending) { pending = true; requestAnimationFrame(draw); }
+}
+
+// Called by zoom / pan: draw a cheap frame now, the full one when input stops.
+function interact() {
+  moving = true;
+  clearTimeout(idleTimer);
+  idleTimer = setTimeout(() => { moving = false; schedule(); }, 160);
+  schedule();
+}
+
+// ---------------------------------------------------------------------------
+// Hover / click
+// ---------------------------------------------------------------------------
+
+function tileAt(px, py) {
+  for (let j = visCount - 1; j >= 0; j--) {
+    const i = vis[j], rs = RAD[i] * scale;
+    if (Math.hypot(px - toX(C[2 * i]), py - toY(C[2 * i + 1])) > rs) continue;
+    const path = new Path2D();
+    tracePath(path, i);
+    if (ctx.isPointInPath(path, px * dpr, py * dpr)) return i;
+  }
+  return -1;
+}
+
+function showInfo(i, note = "") {
+  const info = document.getElementById("info");
+  if (i < 0) { info.innerHTML = '<span class="dim">Hover a tile</span>'; return; }
+  const word = wordOf(i) || "e";
+  const fmt = v => v.toFixed(6).padStart(10);
+  const verts = [0, 1, 2].map(k =>
+    `${"pqr"[k]}: (${fmt(C[2 * i] + O[6 * i + 2 * k])}, ${fmt(C[2 * i + 1] + O[6 * i + 2 * k + 1])})`);
+  info.innerHTML = "";
+  const w = document.createElement("div"); w.className = "word"; w.textContent = word;
+  const d = document.createElement("div"); d.className = "dim";
+  d.textContent = `length ${LEN[i]}${note ? " · " + note : ""}`;
+  const v = document.createElement("pre"); v.className = "dim"; v.style.margin = "4px 0 0";
+  v.textContent = verts.join("\n");
+  info.append(w, d, v);
+}
+
+// ---------------------------------------------------------------------------
+// Input
+// ---------------------------------------------------------------------------
+
+function zoomAt(px, py, f) {
+  const wx = cx + (px - W / 2) / scale, wy = cy - (py - H / 2) / scale;
+  scale = Math.min(fitScale * 1e9, Math.max(fitScale * 0.3, scale * f));
+  cx = wx - (px - W / 2) / scale; cy = wy + (py - H / 2) / scale;
+  interact();
+}
+
+canvas.addEventListener("wheel", e => {
+  e.preventDefault();
+  const unit = e.deltaMode === 1 ? 16 : e.deltaMode === 2 ? H : 1;
+  zoomAt(e.offsetX, e.offsetY, Math.exp(-e.deltaY * unit * 0.0015));
+}, { passive: false });
+
+const pointers = new Map();
+let moved = false, pinchDist = 0;
+
+canvas.addEventListener("pointerdown", e => {
+  canvas.setPointerCapture(e.pointerId);
+  pointers.set(e.pointerId, { x: e.offsetX, y: e.offsetY });
+  moved = false;
+  if (pointers.size === 2) {
+    const [a, b] = [...pointers.values()];
+    pinchDist = Math.hypot(a.x - b.x, a.y - b.y);
+  }
+  canvas.classList.add("dragging");
+});
+
+canvas.addEventListener("pointermove", e => {
+  const prev = pointers.get(e.pointerId);
+  if (!prev) {
+    const i = tileAt(e.offsetX, e.offsetY);
+    if (i !== hovered) { hovered = i; showInfo(i); schedule(); }
+    return;
+  }
+  const cur = { x: e.offsetX, y: e.offsetY };
+  if (pointers.size === 2) {
+    pointers.set(e.pointerId, cur);
+    const [a, b] = [...pointers.values()];
+    const d = Math.hypot(a.x - b.x, a.y - b.y);
+    if (pinchDist > 0) zoomAt((a.x + b.x) / 2, (a.y + b.y) / 2, d / pinchDist);
+    pinchDist = d; moved = true;
+    return;
+  }
+  const dx = cur.x - prev.x, dy = cur.y - prev.y;
+  if (Math.abs(dx) + Math.abs(dy) > 0) {
+    if (Math.abs(dx) + Math.abs(dy) > 2) moved = true;
+    cx -= dx / scale; cy += dy / scale;
+    pointers.set(e.pointerId, cur);
+    interact();
+  }
+});
+
+function endPointer(e) {
+  pointers.delete(e.pointerId);
+  if (pointers.size < 2) pinchDist = 0;
+  if (pointers.size === 0) canvas.classList.remove("dragging");
+}
+
+canvas.addEventListener("pointerup", e => {
+  const wasClick = !moved && pointers.size === 1;
+  endPointer(e);
+  if (!wasClick) return;
+  const i = tileAt(e.offsetX, e.offsetY);
+  if (i < 0) return;
+  hovered = i;
+  const word = wordOf(i) || "e";
+  navigator.clipboard?.writeText(word).then(
+    () => showInfo(i, "copied"), () => showInfo(i));
+  schedule();
+});
+canvas.addEventListener("pointercancel", endPointer);
+canvas.addEventListener("pointerleave", () => {
+  if (pointers.size === 0 && hovered >= 0) { hovered = -1; showInfo(-1); schedule(); }
+});
+
+const lblBtn = document.getElementById("lbl");
+function setLabels(on) { labelsOn = on; lblBtn.setAttribute("aria-pressed", String(on)); schedule(); }
+lblBtn.onclick = () => setLabels(!labelsOn);
+document.getElementById("zin").onclick = () => zoomAt(W / 2, H / 2, 1.6);
+document.getElementById("zout").onclick = () => zoomAt(W / 2, H / 2, 1 / 1.6);
+document.getElementById("reset").onclick = reset;
+
+window.addEventListener("keydown", e => {
+  if (e.key === "l" || e.key === "L") setLabels(!labelsOn);
+  else if (e.key === "0" || e.key === "r") reset();
+  else if (e.key === "+" || e.key === "=") zoomAt(W / 2, H / 2, 1.6);
+  else if (e.key === "-" || e.key === "_") zoomAt(W / 2, H / 2, 1 / 1.6);
+});
+
+document.getElementById("title").textContent = META.title;
+document.getElementById("subtitle").textContent =
+  `${META.kind} · ${N.toLocaleString()} tiles · ${META.scheme} coloring`;
+setLabels(labelsOn);
+new ResizeObserver(resize).observe(canvas);
+</script>
+</body>
+</html>

@@ -25,7 +25,7 @@ from matplotlib.collections import PatchCollection  # noqa: E402
 from matplotlib.patches import Circle, PathPatch  # noqa: E402
 from matplotlib.path import Path as MplPath  # noqa: E402
 
-from geometry import EUCLIDEAN, HYPERBOLIC, SPHERICAL, Triangle, arc_through  # noqa: E402
+from geometry import EUCLIDEAN, HYPERBOLIC, SPHERICAL, Triangle, arc_through, fmt_order  # noqa: E402
 from group import Tile  # noqa: E402
 
 COLOR_SCHEMES = ("alternate", "wordlength", "none")
@@ -147,7 +147,8 @@ def render(
             ax.text(c.real, c.imag, t.label, ha="center", va="center",
                     fontsize=fs, color=txt_color, family="monospace")
 
-    ax.set_title(f"Δ({tri.p},{tri.q},{tri.r}) — {tri.kind}, {len(drawn)} tiles",
+    name = ",".join(fmt_order(n) for n in (tri.p, tri.q, tri.r))
+    ax.set_title(f"Δ({name}) — {tri.kind}, {len(drawn)} tiles",
                  fontsize=11, color=_EDGE)
 
     plt.rcParams["svg.fonttype"] = "none"
